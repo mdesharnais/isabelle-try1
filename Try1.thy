@@ -91,7 +91,7 @@ fun silence_methods (debug : bool) : Proof.context -> Proof.context =
 
 local
 
-fun generic_try0_step mode (timeout_opt : Time.time option) (facts_override : facts_override)
+fun generic_try1_step mode (timeout_opt : Time.time option) (facts_override : facts_override)
   (st : Proof.state) (proof_methods : string list) =
   let
     fun trd (_, _, t) = t
@@ -126,7 +126,7 @@ fun generic_try0_step mode (timeout_opt : Time.time option) (facts_override : fa
 
 in
 
-fun generic_try0 mode (timeout_opt : Time.time option) (facts_override : facts_override)
+fun generic_try1 mode (timeout_opt : Time.time option) (facts_override : facts_override)
   (st : Proof.state) =
   let
     val st = Proof.map_contexts (silence_methods false) st
@@ -137,7 +137,7 @@ fun generic_try0 mode (timeout_opt : Time.time option) (facts_override : facts_o
       |> map (filter (fn s => s <> "") o space_explode " ")
     fun iterate [] = []
       | iterate (step :: steps) =
-        (case generic_try0_step mode timeout_opt facts_override st step of
+        (case generic_try1_step mode timeout_opt facts_override st step of
           [] => iterate steps
         | successes=> successes)
   in
@@ -146,11 +146,11 @@ fun generic_try0 mode (timeout_opt : Time.time option) (facts_override : facts_o
 
 end
 
-val try0 = generic_try0 Normal
+val try1 = generic_try1 Normal
 
-fun interpret_try0_output mode (timeout_opt : Time.time option) (facts_override : facts_override)
+fun interpret_try1_output mode (timeout_opt : Time.time option) (facts_override : facts_override)
   (st : Proof.state) =
-  (case generic_try0 mode timeout_opt facts_override st of
+  (case generic_try1 mode timeout_opt facts_override st of
     [] => ((if mode = Normal then writeln "No proof found" else ()); (false, (noneN, [])))
   | xs as (name, command, _) :: _ =>
   let
@@ -172,9 +172,9 @@ fun interpret_try0_output mode (timeout_opt : Time.time option) (facts_override 
     (true, (name, if mode = Auto_Try then [message] else (writeln message; [])))
   end);
 
-fun try0_trans (facts_override : facts_override) =
+fun try1_trans (facts_override : facts_override) =
   Toplevel.keep_proof
-    (ignore o interpret_try0_output Normal (SOME default_timeout) facts_override o Toplevel.proof_of);
+    (ignore o interpret_try1_output Normal (SOME default_timeout) facts_override o Toplevel.proof_of);
 
 fun merge_attrs (s1, i1, e1, d1) (s2, i2, e2, d2) = (s1 @ s2, i1 @ i2, e1 @ e2, d1 @ d2);
 
@@ -198,12 +198,12 @@ val parse_attrs : facts_override parser =
 
 val _ =
   Outer_Syntax.command \<^command_keyword>\<open>try1\<close> "try a combination of proof methods"
-    (Scan.optional parse_attrs empty_facts_override #>> try0_trans);
+    (Scan.optional parse_attrs empty_facts_override #>> try1_trans);
 
 (* val _ =
   Try.tool_setup
    {name = "try1", weight = 30, auto_option = \<^system_option>\<open>auto_methods\<close>,
-    body = fn auto => generic_try0 (if auto then Auto_Try else Try) NONE empty_facts_override}; *)
+    body = fn auto => generic_try1 (if auto then Auto_Try else Try) NONE empty_facts_override}; *)
 
 end;
 
@@ -245,12 +245,12 @@ fun add_attr_text (NONE, _) s = s
     s ^ " " ^ (if x = "" then "" else x ^ ": ") ^ space_implode " " fs;
 
 fun attrs_text (sx, ix, ex, dx)
-    ({simp_add = ss, intro_add = is, elim_add = es, dest_add = ds} : Try0.facts_override) =
+    ({simp_add = ss, intro_add = is, elim_add = es, dest_add = ds} : Try1.facts_override) =
   "" |> fold add_attr_text [(sx, ss), (ix, is), (ex, es), (dx, ds)];
 
 fun apply_named_method (name, ((all_goals, run_if_auto_try), attrs)) mode timeout_opt
-    (facts_override : Try0.facts_override) st =
-  if mode <> Try0.Auto_Try orelse run_if_auto_try then
+    (facts_override : Try1.facts_override) st =
+  if mode <> Try1.Auto_Try orelse run_if_auto_try then
     let val attrs = attrs_text attrs facts_override in
       apply_generic timeout_opt
         ((name ^ attrs |> attrs <> "" ? enclose "(" ")") ^
@@ -288,18 +288,11 @@ val named_methods =
 in
 
 val () = List.app (fn (pair as (name, _)) =>
-  Try0.register_proof_method name (apply_named_method pair)) named_methods
-
-val _ = @{print} (Try0.get_all_proof_methods ())
+  Try1.register_proof_method name (apply_named_method pair)) named_methods
 
 end
 \<close>
 
 declare [[try1_schedule = "order presburger linarith algebra | argo metis | simp auto blast fast fastforce force meson satx"]]
-
-lemma
-  fixes x :: "nat"
-  shows "x < y \<Longrightarrow> y \<le> z \<Longrightarrow> x < z"
-  try1
 
 end
