@@ -1,5 +1,5 @@
 theory Try1
-  imports Main
+  imports Pure
   keywords "try1" :: diag
 begin
 
@@ -74,22 +74,13 @@ end
 fun time_string ms = string_of_int ms ^ " ms";
 fun tool_time_string (s, ms) = s ^ ": " ^ time_string ms;
 
-(* Makes reconstructor tools as silent as possible. The "set_visible" calls suppresses "Unification
-   bound exceeded" warnings and the like. *)
-fun silence_methods (debug : bool) : Proof.context -> Proof.context =
-  Config.put Metis_Tactic.verbose debug
-  #> not debug ? (fn ctxt =>
-      ctxt
-      |> Simplifier_Trace.disable
-      |> Context_Position.set_visible false
-      |> Config.put Unify.unify_trace false
-      |> Config.put Argo_Tactic.trace "none"
-      |> Proof_Context.background_theory (fn thy =>
-          thy
-          |> Context_Position.set_visible_global false
-          |> Config.put_global Unify.unify_trace false));
-
 local
+
+fun serial_commas _ [] = ["??"]
+  | serial_commas _ [s] = [s]
+  | serial_commas conj [s1, s2] = [s1, conj, s2]
+  | serial_commas conj [s1, s2, s3] = [s1 ^ ",", s2 ^ ",", conj, s3]
+  | serial_commas conj (s :: ss) = s ^ "," :: serial_commas conj ss;
 
 fun generic_try1_step mode (timeout_opt : Time.time option) (facts_override : facts_override)
   (st : Proof.state) (proof_methods : string list) =
@@ -117,7 +108,7 @@ fun generic_try1_step mode (timeout_opt : Time.time option) (facts_override : fa
       else Par_List.get_some try_method #> the_list;
   in
     if mode = Normal then
-      "Trying " ^ space_implode " " (Try.serial_commas "and" (map quote proof_methods)) ^ "..."
+      "Trying " ^ space_implode " " (serial_commas "and" (map quote proof_methods)) ^ "..."
       |> writeln
     else
       ();
@@ -129,7 +120,6 @@ in
 fun generic_try1 mode (timeout_opt : Time.time option) (facts_override : facts_override)
   (st : Proof.state) =
   let
-    val st = Proof.map_contexts (silence_methods false) st
     val ctxt = Proof.context_of st
     val proof_methodss =
       Config.get ctxt schedule
@@ -205,94 +195,8 @@ val _ =
    {name = "try1", weight = 30, auto_option = \<^system_option>\<open>auto_methods\<close>,
     body = fn auto => generic_try1 (if auto then Auto_Try else Try) NONE empty_facts_override}; *)
 
-end;
-
-
-local
-
-fun can_apply timeout_opt pre post tac st =
-  let val {goal, ...} = Proof.goal st in
-    (case (case timeout_opt of
-            SOME timeout => Timeout.apply_physical timeout
-          | NONE => fn f => fn x => f x) (Seq.pull o tac) (pre st) of
-      SOME (x, _) => Thm.nprems_of (post x) < Thm.nprems_of goal
-    | NONE => false)
-  end;
-
-fun apply_generic timeout_opt command pre post apply st =
-  if try (can_apply timeout_opt pre post apply) st = SOME true then
-    SOME command
-  else
-    NONE;
-
-fun parse_method keywords s =
-  enclose "(" ")" s
-  |> Token.explode keywords Position.start
-  |> filter Token.is_proper
-  |> Scan.read Token.stopper Method.parse
-  |> (fn SOME (Method.Source src, _) => src | _ => raise Fail "expected Source");
-
-fun apply_named_method_on_first_goal ctxt =
-  parse_method (Thy_Header.get_keywords' ctxt)
-  #> Method.method_cmd ctxt
-  #> Method.Basic
-  #> (fn m => Method.Combinator (Method.no_combinator_info, Method.Select_Goals 1, [m]))
-  #> Proof.refine;
-
-fun add_attr_text (NONE, _) s = s
-  | add_attr_text (_, []) s = s
-  | add_attr_text (SOME x, fs) s =
-    s ^ " " ^ (if x = "" then "" else x ^ ": ") ^ space_implode " " fs;
-
-fun attrs_text (sx, ix, ex, dx)
-    ({simp_add = ss, intro_add = is, elim_add = es, dest_add = ds} : Try1.facts_override) =
-  "" |> fold add_attr_text [(sx, ss), (ix, is), (ex, es), (dx, ds)];
-
-fun apply_named_method (name, ((all_goals, run_if_auto_try), attrs)) mode timeout_opt
-    (facts_override : Try1.facts_override) st =
-  if mode <> Try1.Auto_Try orelse run_if_auto_try then
-    let val attrs = attrs_text attrs facts_override in
-      apply_generic timeout_opt
-        ((name ^ attrs |> attrs <> "" ? enclose "(" ")") ^
-         (if all_goals andalso Thm.nprems_of (#goal (Proof.goal st)) > 1 then "[1]" else ""))
-        I (#goal o Proof.goal)
-        (apply_named_method_on_first_goal (Proof.context_of st) (name ^ attrs)
-          #> Seq.filter_results) st
-    end
-  else
-    NONE;
-
-val full_attrs = (SOME "simp", SOME "intro", SOME "elim", SOME "dest");
-val clas_attrs = (NONE, SOME "intro", SOME "elim", SOME "dest");
-val simp_attrs = (SOME "add", NONE, NONE, NONE);
-val metis_attrs = (SOME "", SOME "", SOME "", SOME "");
-val no_attrs = (NONE, NONE, NONE, NONE);
-
-(* name * ((all_goals, run_if_auto_try), (simp, intro, elim, dest) *)
-val named_methods =
-  [("simp", ((false, true), simp_attrs)),
-   ("auto", ((true, true), full_attrs)),
-   ("blast", ((false, true), clas_attrs)),
-   ("metis", ((false, true), metis_attrs)),
-   ("argo", ((false, true), no_attrs)),
-   ("linarith", ((false, true), no_attrs)),
-   ("presburger", ((false, true), no_attrs)),
-   ("algebra", ((false, true), no_attrs)),
-   ("fast", ((false, false), clas_attrs)),
-   ("fastforce", ((false, false), full_attrs)),
-   ("force", ((false, false), full_attrs)),
-   ("meson", ((false, false), metis_attrs)),
-   ("satx", ((false, false), no_attrs)),
-   ("order", ((false, true), no_attrs))];
-
-in
-
-val () = List.app (fn (pair as (name, _)) =>
-  Try1.register_proof_method name (apply_named_method pair)) named_methods
-
 end
 \<close>
 
-declare [[try1_schedule = "order presburger linarith algebra | argo metis | simp auto blast fast fastforce force meson satx"]]
 
 end
